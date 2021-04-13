@@ -3,11 +3,14 @@ import random
 from locust import task, HttpUser, between, events
 
 
-ACCOUNT_IDS = []
-
-
 class BillsUser(HttpUser):
     wait_time = between(0, 1)
+    account_ids = []
+    account_id = None
+
+    def start(self, group):
+        self.account_ids = []
+        return super().start(group)
 
     def on_start(self):
         resp = self.client.post("/customers/", json={
@@ -17,7 +20,7 @@ class BillsUser(HttpUser):
         data = resp.json()
         assert "id" in data
         self.account_id = data["id"]
-        ACCOUNT_IDS.append(self.account_id)
+        self.account_ids.append(self.account_id)
 
         resp = self.client.post(f"/accounts/{self.account_id}/deposit", json={
             "amount": "300000"
@@ -34,5 +37,5 @@ class BillsUser(HttpUser):
     def transfer(self):
         self.client.post(f"/accounts/{self.account_id}/transfer", json={
             "amount": "1000",
-            "account_id": random.choice(ACCOUNT_IDS)
+            "account_id": random.choice(self.account_ids)
         }, name="transfer")

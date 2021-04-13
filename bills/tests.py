@@ -1,4 +1,6 @@
 import asyncio
+import asynctest
+from db import db
 from unittest import TestCase
 from fastapi.testclient import TestClient
 
@@ -10,7 +12,7 @@ def sync_exec(coro):
     return loop.run_until_complete(coro)
 
 
-class BillsTestCase(TestCase):
+class BillsAPITestCase(TestCase):
     def setUp(self) -> None:
         from main import app
         self.client = TestClient(app)
@@ -44,14 +46,6 @@ class BillsTestCase(TestCase):
 
         resp = self.deposit_to_account(account_id=self.account.id, amount=100)
         self.assertEqual(204, resp.status_code)
-
-        self.account = sync_exec(Account.get(self.account.id))
-
-        self.assertEqual(100, self.account.balance)
-        txs = sync_exec(Transaction.query.where(Transaction.account_id == self.account.id).gino.all())
-        self.assertEqual(1, len(txs))
-
-        self.assertEqual(100, txs[0].amount)
 
     def test_deposit_to_not_exists_account(self):
         """Пополнение не существующего счета"""
@@ -126,3 +120,81 @@ class BillsTestCase(TestCase):
         self.assertEqual("not_found", data["error_code"])
         self.assertEqual("account", data["detail"]["model"], "account")
         self.assertEqual(account_to_id, data["detail"]["identifier"])
+
+
+class BillsTestCase(asynctest.TestCase):
+    async def setUp(self):
+        await db.set_bind(
+            db.config["dsn"],
+            min_size=10,
+            max_size=10,
+        )
+
+    async def tearDown(self):
+        await db.pop_bind().close()
+
+    async def test_change_balance(self):
+        account = await Account.create()
+        await account.change_balance(1000)
+        account = await Account.get(account.id)
+        self.assertEqual(1000, account.balance)
+        transactions = await Transaction.query.where(Transaction.account_id == account.id).gino.all()
+        self.assertEqual(1, len(transactions))
+        self.assertEqual(1000, transactions[0].amount)
+
+    async def test_transfer_to_account(self):
+        account1 = await Account.create()
+        await account1.change_balance(1000)
+        account2 = await Account.create()
+
+        await account1.transfer(account2, 1000)
+
+        account1 = await Account.get(account1.id)
+        self.assertEqual(0, account1.balance)
+
+        account2 = await Account.get(account2.id)
+        self.assertEqual(1000, account2.balance)
+
+        transactions = await Transaction.query.where(Transaction.account_id == account1.id).gino.all()
+        self.assertEqual(2, len(transactions))
+        self.assertEqual(-1000, transactions[1].amount)
+
+        transactions = await Transaction.query.where(Transaction.account_id == account2.id).gino.all()
+        self.assertEqual(1, len(transactions))
+        self.assertEqual(1000, transactions[0].amount)
+
+    async def test_change_balance_consistency_in_concurrency(self):
+        """Проверка согласованности данных при изменении баланса в условиях параллелизма"""
+        number_operations = 1000
+        account = await Account.create()
+        cors = []
+        for i in range(number_operations):
+            cors.append(account.change_balance(1))
+
+        await asyncio.gather(*cors)
+
+        account = await Account.get(account.id)
+        self.assertEqual(number_operations, account.balance)
+
+    async def test_transfer_consistency_in_concurrency(self):
+        """Проверка согласованности данных при переводе средст между счетами в условиях параллелизма"""
+        number_operations = 1000
+
+        account1 = await Account.create()
+        await account1.change_balance(number_operations)
+
+        account2 = await Account.create()
+        await account2.change_balance(number_operations)
+
+        cors = []
+        for i in range(number_operations):
+            cors.append(account1.transfer(account2, 1))
+            cors.append(account2.transfer(account1, 1))
+
+        await asyncio.gather(*cors)
+
+        account1 = await Account.get(account1.id)
+        self.assertEqual(number_operations, account1.balance)
+
+        account2 = await Account.get(account2.id)
+        self.assertEqual(number_operations, account2.balance)

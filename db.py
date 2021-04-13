@@ -6,5 +6,5 @@ DATABASE_PORT = int(os.getenv("DATABASE_PORT", "5432"))
 
 
 db = Gino(
-    dsn=f'postgresql://postgres:postgres@{DATABASE_HOST}:{DATABASE_PORT}/postgres'
+    dsn=f"postgresql://postgres:postgres@{DATABASE_HOST}:{DATABASE_PORT}/postgres",
 )
